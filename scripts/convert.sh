@@ -21,8 +21,12 @@
 #   codex        — OpenAI Codex CLI agent 文件 (.codex/agents/*.toml)
 #   deerflow     — DeerFlow 2.0 custom skill 文件 (skills/custom/<slug>/SKILL.md)
 #   workbuddy    — WorkBuddy skill 文件 (~/.workbuddy/skills/<slug>/SKILL.md)
+#   codewhale    — CodeWhale（原 DeepSeek-TUI）skill 文件 (~/.codewhale/skills/<slug>/SKILL.md)
 #   hermes       — Hermes Agent skill 文件 (~/.hermes/skills/<category>/<slug>/SKILL.md)
-#   kiro         — Kiro agent JSON 文件 (.kiro/agents/*.json + prompts/*.md)
+#   kiro         — Kiro agent .md 文件 (.kiro/agents/*.md，带 YAML frontmatter)
+#   qoder        — Qoder 自定义智能体文件 (.qoder/agents/*.md)
+#   zcode        — 智谱 ZCode subagent 文件 (~/.zcode/agents/*.md，带 YAML frontmatter)
+#   qwenpaw      — QwenPaw skill 文件 (~/.qwenpaw/skill_pool/<slug>/SKILL.md)
 #   all          — 所有工具（默认）
 #
 # 输出到仓库根目录下的 integrations/<tool>/。
@@ -49,8 +53,8 @@ OUT_DIR="$REPO_ROOT/integrations"
 TODAY="$(date +%Y-%m-%d)"
 
 AGENT_DIRS=(
-  academic design engineering finance game-development hr legal marketing paid-media sales product
-  project-management supply-chain testing support spatial-computing specialized
+  academic company design engineering finance game-development gis hr legal marketing paid-media sales product
+  project-management security supply-chain testing support spatial-computing specialized
 )
 
 # --- 用法 ---
@@ -105,6 +109,8 @@ resolve_opencode_color() {
     lime)           echo "#84CC16" ;;
     gray)           echo "#6B7280" ;;
     fuchsia)        echo "#D946EF" ;;
+    navy)           echo "#000080" ;;
+    slate)          echo "#475569" ;;
     *)              echo "$c" ;;
   esac
 }
@@ -380,7 +386,7 @@ convert_codex() {
   # TOML 多行基本字符串（"""..."""）中反斜杠必须转义为 \\
   # 同时转义三引号（极罕见但防御性处理）
   local escaped_body
-  escaped_body="$(echo "$body" | sed -e 's/\\/\\\\/g' -e 's/"""/\\"""/')"
+  escaped_body="$(echo "$body" | sed -e 's/\\/\\\\/g' -e 's/"""/\\"""/g')"
 
   local escaped_desc
   escaped_desc="$(echo "$description" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
@@ -416,6 +422,61 @@ ${body}
 HEREDOC
 }
 
+# 根据目录名获取 Qoder 工具集合
+get_qoder_tools() {
+  local dirpath="$1"
+  # 提取顶级目录名（处理子目录情况，如 game-development/unity）
+  local topdir
+  topdir="$(echo "$dirpath" | sed "s|^$REPO_ROOT/||" | cut -d'/' -f1)"
+
+  case "$topdir" in
+    academic)           echo "Read, Write, WebSearch, WebFetch" ;;
+    design)             echo "Read, Write, WebFetch" ;;
+    engineering)        echo "Read, Grep, Glob, Bash, Edit, Write" ;;
+    finance)            echo "Read, Write, WebSearch" ;;
+    game-development)   echo "Read, Bash, Edit, Write" ;;
+    gis)                echo "Read, Bash, Edit, Write, WebFetch" ;;
+    hr)                 echo "Read, Write, WebFetch" ;;
+    legal)              echo "Read, Write, WebFetch" ;;
+    marketing)          echo "Read, Write, WebSearch, WebFetch" ;;
+    paid-media)         echo "Read, Write, WebSearch" ;;
+    product)            echo "Read, Write, WebSearch, WebFetch" ;;
+    project-management) echo "Read, Write, Bash" ;;
+    sales)              echo "Read, Write, WebFetch, WebSearch" ;;
+    security)           echo "Read, Grep, Glob, Bash, Edit, Write" ;;
+    spatial-computing)  echo "Read, Bash, Edit, Write" ;;
+    specialized)        echo "Read, Write, WebFetch, WebSearch" ;;
+    supply-chain)       echo "Read, Write, WebFetch" ;;
+    support)            echo "Read, Write, WebFetch, WebSearch" ;;
+    testing)            echo "Read, Bash, Grep, Edit" ;;
+    *)                  echo "Read, Write" ;;  # 默认工具集
+  esac
+}
+
+convert_qoder() {
+  local file="$1"
+  local description slug outfile body tools
+
+  description="$(get_field "description" "$file")"
+  slug="$(slugify_from_file "$file")"
+  body="$(get_body "$file")"
+  tools="$(get_qoder_tools "$(dirname "$file")")"
+
+  outfile="$OUT_DIR/qoder/agents/${slug}.md"
+  mkdir -p "$OUT_DIR/qoder/agents"
+
+  # Qoder 自定义智能体格式：带 YAML frontmatter 的 .md 文件
+  # name 使用文件名（已是 kebab-case），tools 根据目录自动推荐
+  cat > "$outfile" <<HEREDOC
+---
+name: ${slug}
+description: ${description}
+tools: ${tools}
+---
+${body}
+HEREDOC
+}
+
 convert_workbuddy() {
   local file="$1"
   local name description slug outdir outfile body
@@ -434,6 +495,29 @@ convert_workbuddy() {
 name: ${slug}
 description: ${description}
 allowed-tools: Read Write Edit Bash Grep Glob
+---
+${body}
+HEREDOC
+}
+
+# CodeWhale（原 DeepSeek-TUI）—— skill 文件 ~/.codewhale/skills/<slug>/SKILL.md
+# CodeWhale 的 /skills 从该目录加载，frontmatter 用 name + description（与内置 skill 一致）
+convert_codewhale() {
+  local file="$1"
+  local description slug outdir outfile body
+
+  description="$(get_field "description" "$file")"
+  slug="$(slugify_from_file "$file")"
+  body="$(get_body "$file")"
+
+  outdir="$OUT_DIR/codewhale/$slug"
+  outfile="$outdir/SKILL.md"
+  mkdir -p "$outdir"
+
+  cat > "$outfile" <<HEREDOC
+---
+name: ${slug}
+description: ${description}
 ---
 ${body}
 HEREDOC
@@ -470,6 +554,68 @@ ${body}
 HEREDOC
 }
 
+# 智谱 ZCode —— subagent 文件 ~/.zcode/agents/<slug>.md
+# 参考：https://zcode.z.ai/en/docs/subagents
+# 格式为带 YAML frontmatter 的 Markdown，name 与 description 必填，
+# 缺任一字段 ZCode 会忽略该文件；color 为可选字段。
+convert_zcode() {
+  local file="$1"
+  local description color slug outfile body
+
+  description="$(get_field "description" "$file")"
+  color="$(get_field "color" "$file")"
+  slug="$(slugify_from_file "$file")"
+  body="$(get_body "$file")"
+
+  outfile="$OUT_DIR/zcode/${slug}.md"
+  mkdir -p "$(dirname "$outfile")"
+
+  if [[ -n "$color" ]]; then
+    cat > "$outfile" <<HEREDOC
+---
+name: ${slug}
+description: ${description}
+color: ${color}
+---
+${body}
+HEREDOC
+  else
+    cat > "$outfile" <<HEREDOC
+---
+name: ${slug}
+description: ${description}
+---
+${body}
+HEREDOC
+  fi
+}
+
+# QwenPaw —— skill 目录 ~/.qwenpaw/skill_pool/<slug>/SKILL.md
+# 参考：https://github.com/agentscope-ai/QwenPaw/blob/main/website/public/docs/skills.zh.md
+# SKILL.md 必须带 YAML frontmatter，name 与 description 必填。
+# 手动放置的 skill 会在下次清单调和时被检测到，并以「禁用」状态写入 skill.json，
+# 需要在控制台启用后广播到工作区。
+convert_qwenpaw() {
+  local file="$1"
+  local description slug outdir outfile body
+
+  description="$(get_field "description" "$file")"
+  slug="$(slugify_from_file "$file")"
+  body="$(get_body "$file")"
+
+  outdir="$OUT_DIR/qwenpaw/$slug"
+  outfile="$outdir/SKILL.md"
+  mkdir -p "$outdir"
+
+  cat > "$outfile" <<HEREDOC
+---
+name: ${slug}
+description: ${description}
+---
+${body}
+HEREDOC
+}
+
 convert_kiro() {
   local file="$1"
   local name description slug body
@@ -479,24 +625,17 @@ convert_kiro() {
   slug="$(slugify_from_file "$file")"
   body="$(get_body "$file")"
 
-  mkdir -p "$OUT_DIR/kiro/prompts"
+  mkdir -p "$OUT_DIR/kiro"
 
-  # 写入 prompt 文件
-  cat > "$OUT_DIR/kiro/prompts/${slug}.md" <<HEREDOC
+  # Kiro 自定义智能体格式：带 YAML frontmatter 的 .md 文件
+  # 放置于 ~/.kiro/agents/<slug>.md
+  # 参考：https://kiro.dev/docs/chat/subagents/
+  cat > "$OUT_DIR/kiro/${slug}.md" <<HEREDOC
+---
+name: ${slug}
+description: ${description}
+---
 ${body}
-HEREDOC
-
-  # 写入 JSON 配置文件
-  # 需要转义 description 中的双引号
-  local escaped_desc
-  escaped_desc="$(echo "$description" | sed 's/"/\\"/g')"
-
-  cat > "$OUT_DIR/kiro/${slug}.json" <<HEREDOC
-{
-  "name": "${slug}",
-  "description": "${escaped_desc}",
-  "prompt": "file://./prompts/${slug}.md"
-}
 HEREDOC
 }
 
@@ -598,8 +737,12 @@ run_conversions() {
         codex)       convert_codex       "$file" ;;
         deerflow)    convert_deerflow    "$file" ;;
         workbuddy)   convert_workbuddy   "$file" ;;
+        codewhale)   convert_codewhale   "$file" ;;
         hermes)      convert_hermes      "$file" ;;
         kiro)        convert_kiro        "$file" ;;
+        qoder)       convert_qoder       "$file" ;;
+        zcode)       convert_zcode       "$file" ;;
+        qwenpaw)     convert_qwenpaw     "$file" ;;
         aider)       accumulate_aider    "$file" ;;
         windsurf)    accumulate_windsurf "$file" ;;
       esac
@@ -626,7 +769,7 @@ main() {
     esac
   done
 
-  local valid_tools=("antigravity" "gemini-cli" "opencode" "cursor" "trae" "aider" "windsurf" "openclaw" "qwen" "codex" "deerflow" "workbuddy" "hermes" "kiro" "all")
+  local valid_tools=("antigravity" "gemini-cli" "opencode" "cursor" "trae" "aider" "windsurf" "openclaw" "qwen" "codex" "deerflow" "workbuddy" "codewhale" "hermes" "kiro" "qoder" "zcode" "qwenpaw" "all")
   local valid=false
   for t in "${valid_tools[@]}"; do [[ "$t" == "$tool" ]] && valid=true && break; done
   if ! $valid; then
@@ -642,7 +785,7 @@ main() {
 
   local tools_to_run=()
   if [[ "$tool" == "all" ]]; then
-    tools_to_run=("antigravity" "gemini-cli" "opencode" "cursor" "trae" "aider" "windsurf" "openclaw" "qwen" "codex" "deerflow" "workbuddy" "hermes" "kiro")
+    tools_to_run=("antigravity" "gemini-cli" "opencode" "cursor" "trae" "aider" "windsurf" "openclaw" "qwen" "codex" "deerflow" "workbuddy" "codewhale" "hermes" "kiro" "qoder" "zcode" "qwenpaw")
   else
     tools_to_run=("$tool")
   fi

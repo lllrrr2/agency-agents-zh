@@ -1,7 +1,10 @@
 {
   "name": "agency-agents-zh",
-  "version": "1.1.0",
-  "description": "211 个即插即用的 AI 专家角色定义 — 从前端开发到区块链安全，从小红书运营到抖音策略",
+  "version": "1.4.0",
+  "description": "277 个即插即用的 AI 专家角色定义 — 从 CEO/CTO 高管层到前端开发、区块链安全，从小红书运营到抖音策略",
+  "scripts": {
+    "check:counts": "node scripts/check-counts.mjs"
+  },
   "keywords": [
     "ai-agents",
     "prompts",
@@ -23,10 +26,12 @@
   },
   "files": [
     "academic/",
+    "company/",
     "design/",
     "engineering/",
     "finance/",
     "game-development/",
+    "gis/",
     "hr/",
     "legal/",
     "marketing/",
@@ -34,6 +39,7 @@
     "product/",
     "project-management/",
     "sales/",
+    "security/",
     "spatial-computing/",
     "specialized/",
     "strategy/",

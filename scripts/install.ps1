@@ -4,7 +4,7 @@
 # 请先运行 scripts\convert.ps1 生成集成文件。
 #
 # 用法：
-#   .\scripts\install.ps1 [-Tool <名称>] [-Help]
+#   .\scripts\install.ps1 [-Tool <名称>] [-Profile <名称>] [-Help]
 #
 # 支持的工具：
 #   claude-code  — 复制到 %USERPROFILE%\.claude\agents\
@@ -23,10 +23,28 @@
 #   workbuddy    — 复制到 %USERPROFILE%\.workbuddy\skills\（全局）
 #   hermes       — 复制到 %USERPROFILE%\.hermes\skills\（全局）
 #   kiro         — 复制到 %USERPROFILE%\.kiro\agents\（全局）
+#   zcode        — 复制到 %USERPROFILE%\.zcode\agents\（全局，智谱 ZCode）
+#   qwenpaw      — 复制到 %USERPROFILE%\.qwenpaw\skill_pool\（全局）
 #   all          — 安装所有已检测到的工具（默认）
+#
+# Hermes 专属参数：
+#   -Category <名称[,名称...]>  只安装某一分类下的 skills，可传多个分类。
+#                                Discord 模式下 Hermes 会把每个 skill 注册为斜杠命令，
+#                                总 JSON 超过 8000 字符会被 Discord API 拒绝 (error 50035)，
+#                                若需要在 Discord 中使用建议按分类分批安装。
+#   -Profile <名称>              多 profile 环境下指定安装到哪个 profile（issue #102）。
+#                                Hermes 每个 profile 有独立 skill 库，路径为
+#                                  <base>\profiles\<名称>\skills\
+#                                其中 <base> = HERMES_HOME > $LOCALAPPDATA\hermes > ~\.hermes。
+#                                未指定 -Profile 却检测到已存在 profile 目录时会报错退出，
+#                                避免静默装到根目录。例如：-Tool hermes -Profile work
 
 param(
     [string]$Tool = "all",
+    [string[]]$Category = @(),
+    # 用 $HermesProfile 而非 $Profile：$Profile 是 PowerShell 自动变量，避免遮蔽（issue #102）
+    [Alias('Profile')]
+    [string]$HermesProfile = "",
     [switch]$Help
 )
 
@@ -41,7 +59,7 @@ $Home_        = $env:USERPROFILE
 
 $AllTools = @(
     "claude-code","copilot","antigravity","gemini-cli","opencode","openclaw",
-    "cursor","trae","aider","windsurf","qwen","codex","deerflow","workbuddy","hermes","kiro"
+    "cursor","trae","aider","windsurf","qwen","codex","deerflow","workbuddy","hermes","kiro","zcode","qwenpaw"
 )
 
 # --- 颜色输出 ---
@@ -53,7 +71,7 @@ function Write-Dim    { param($msg) Write-Host "      $msg" -ForegroundColor Dar
 
 # --- 用法 ---
 if ($Help) {
-    Get-Content $MyInvocation.MyCommand.Path | Select-Object -Skip 2 -First 22 |
+    Get-Content $MyInvocation.MyCommand.Path | Select-Object -Skip 2 -First 36 |
         ForEach-Object { $_ -replace '^# ?','' }
     exit 0
 }
@@ -96,10 +114,16 @@ function Detect-Tool {
         "workbuddy"   { (Get-Command workbuddy -ErrorAction SilentlyContinue) -or
                         (Test-Path (Join-Path $Home_ ".workbuddy")) }
         "hermes"      { (Get-Command hermes -ErrorAction SilentlyContinue) -or
-                        (Test-Path (Join-Path $Home_ ".hermes")) }
+                        (Test-Path (Join-Path $Home_ ".hermes")) -or
+                        ($env:HERMES_HOME -and (Test-Path $env:HERMES_HOME)) -or
+                        ($env:LOCALAPPDATA -and (Test-Path (Join-Path $env:LOCALAPPDATA "hermes"))) }
         "kiro"        { (Get-Command kiro -ErrorAction SilentlyContinue) -or
                         (Get-Command kiro-cli -ErrorAction SilentlyContinue) -or
                         (Test-Path (Join-Path $Home_ ".kiro")) }
+        "zcode"       { (Get-Command zcode -ErrorAction SilentlyContinue) -or
+                        (Test-Path (Join-Path $Home_ ".zcode")) }
+        "qwenpaw"     { (Get-Command qwenpaw -ErrorAction SilentlyContinue) -or
+                        (Test-Path (Join-Path $Home_ ".qwenpaw")) }
         default       { $false }
     }
 }
@@ -123,6 +147,8 @@ function Get-ToolLabel {
         "workbuddy"   { "WorkBuddy      (%USERPROFILE%\.workbuddy\skills)" }
         "hermes"      { "Hermes Agent   (%USERPROFILE%\.hermes\skills)" }
         "kiro"        { "Kiro           (%USERPROFILE%\.kiro\agents)" }
+        "zcode"       { "ZCode          (%USERPROFILE%\.zcode\agents)" }
+        "qwenpaw"     { "QwenPaw        (%USERPROFILE%\.qwenpaw\skill_pool)" }
         default       { $ToolName }
     }
 }
@@ -133,7 +159,7 @@ function Install-ClaudeCode {
     $dest = Join-Path $Home_ ".claude\agents"
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     $count = 0
-    foreach ($dir in @("academic","design","engineering","finance","game-development","hr","legal",
+    foreach ($dir in @("academic","company","design","engineering","finance","game-development","hr","legal",
                         "marketing","paid-media","sales","product","project-management",
                         "supply-chain","testing","support","spatial-computing","specialized")) {
         $dirPath = Join-Path $RepoRoot $dir
@@ -152,7 +178,7 @@ function Install-Copilot {
     New-Item -ItemType Directory -Force -Path $dest1 | Out-Null
     New-Item -ItemType Directory -Force -Path $dest2 | Out-Null
     $count = 0
-    foreach ($dir in @("academic","design","engineering","finance","game-development","hr","legal",
+    foreach ($dir in @("academic","company","design","engineering","finance","game-development","hr","legal",
                         "marketing","paid-media","sales","product","project-management",
                         "supply-chain","testing","support","spatial-computing","specialized")) {
         $dirPath = Join-Path $RepoRoot $dir
@@ -191,7 +217,7 @@ function Install-GeminiCli {
     Copy-Item (Join-Path $src "gemini-extension.json") -Destination $dest
     $count = 0
     Get-ChildItem -Path (Join-Path $src "skills") -Directory | ForEach-Object {
-        $skillDest = Join-Path $dest "skills" $_.Name
+        $skillDest = Join-Path (Join-Path $dest "skills") $_.Name
         New-Item -ItemType Directory -Force -Path $skillDest | Out-Null
         Copy-Item (Join-Path $_.FullName "SKILL.md") -Destination $skillDest
         $count++
@@ -332,14 +358,72 @@ function Install-WorkBuddy {
     Write-OK "WorkBuddy: $count 个 skills -> $dest"
 }
 
+# Hermes 安装根目录（不含 profile）：HERMES_HOME > $LOCALAPPDATA\hermes > ~\.hermes（issue #82/#102）
+function Get-HermesBaseDir {
+    if ($env:HERMES_HOME) { return $env:HERMES_HOME }
+    if ($env:LOCALAPPDATA -and (Test-Path (Join-Path $env:LOCALAPPDATA "hermes"))) {
+        return (Join-Path $env:LOCALAPPDATA "hermes")
+    }
+    return (Join-Path $Home_ ".hermes")
+}
+# 现有 profile 名称（<base>\profiles\<name>\）
+function Get-HermesProfileNames {
+    param($base)
+    $pdir = Join-Path $base "profiles"
+    if (-not (Test-Path $pdir)) { return @() }
+    @(Get-ChildItem -Path $pdir -Directory -ErrorAction SilentlyContinue | ForEach-Object Name)
+}
+
 function Install-Hermes {
     $src  = Join-Path $Integrations "hermes"
-    $dest = Join-Path $Home_ ".hermes\skills"
-    if (-not (Test-Path $src)) { Write-Err "integrations\hermes 不存在，请先运行 convert.ps1 -Tool hermes"; return }
+    if (-not (Test-Path $src)) { Write-Err "integrations\hermes 不存在，请先运行 convert.ps1 -Tool hermes"; $script:FailedTools += "hermes"; return }
+
+    # 安装目录解析（issue #82 / #102）：
+    #   1. -Profile <name>                       -> <base>\profiles\<name>\skills
+    #   2. 存在 profile 目录但未指定 -Profile     -> 报错退出（避免静默装到根目录）
+    #   3. 默认                                    -> <base>\skills
+    $base = Get-HermesBaseDir
+    $profileNote = ""
+    if ($HermesProfile) {
+        $profileDir = Join-Path (Join-Path $base "profiles") $HermesProfile
+        $dest = Join-Path $profileDir "skills"
+        $profileNote = " [profile: $HermesProfile]"
+        if (-not (Test-Path $profileDir)) {
+            $existing = (Get-HermesProfileNames $base) -join ", "
+            Write-Warn "profile '$HermesProfile' 尚不存在，将新建目录 $base\profiles\$HermesProfile\。"
+            Write-Warn "请确认名称无误（现有 profile: $existing）。"
+        }
+    } else {
+        $names = @(Get-HermesProfileNames $base)
+        if ($names.Count -gt 0) {
+            Write-Err "检测到 Hermes profile 目录（$base\profiles\），但未指定 -Profile。"
+            Write-Err "为避免装错位置，请用 -Profile <名称> 指定目标 profile。"
+            Write-Err "现有 profile: $($names -join ', ')"
+            Write-Err "或设置 HERMES_HOME 指向单一 profile 根目录后重试。"
+            $script:FailedTools += "hermes"
+            return
+        }
+        $dest = Join-Path $base "skills"
+    }
+
+    $filterNote = ""
+    if ($Category.Count -gt 0) {
+        foreach ($c in $Category) {
+            if (-not (Test-Path (Join-Path $src $c))) {
+                $avail = (Get-ChildItem -Path $src -Directory | ForEach-Object Name) -join ", "
+                Write-Err "hermes 分类不存在: $c（可选: $avail）"
+                $script:FailedTools += "hermes"
+                return
+            }
+        }
+        $filterNote = " [分类: $($Category -join ', ')]"
+    }
+
     $count = 0
     # 保留两级目录结构：category/skill-name/SKILL.md
     Get-ChildItem -Path $src -Directory | ForEach-Object {
         $catName = $_.Name
+        if ($Category.Count -gt 0 -and ($Category -notcontains $catName)) { return }
         Get-ChildItem -Path $_.FullName -Directory | ForEach-Object {
             $skillFile = Join-Path $_.FullName "SKILL.md"
             if (Test-Path $skillFile) {
@@ -350,21 +434,55 @@ function Install-Hermes {
             }
         }
     }
-    Write-OK "Hermes Agent: $count 个 skills -> $dest"
+    Write-OK "Hermes Agent: $count 个 skills -> $dest$filterNote$profileNote"
+    if ($Category.Count -eq 0 -and $count -gt 80) {
+        Write-Warn "Hermes Discord 模式对斜杠命令总长有 8000 字符上限（error 50035）。"
+        Write-Warn "若要在 Discord 中使用，建议用 -Category <名称> 按分类分批安装。"
+    }
+}
+
+function Install-ZCode {
+    $src  = Join-Path $Integrations "zcode"
+    $dest = Join-Path $Home_ ".zcode\agents"
+    if (-not (Test-Path $src)) { Write-Err "integrations\zcode 不存在，请先运行 convert.ps1 -Tool zcode"; return }
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    # 智谱 ZCode subagent 格式：.md 文件（带 YAML frontmatter）
+    # 参考：https://zcode.z.ai/en/docs/subagents
+    $count = (Get-ChildItem -Path $src -Filter "*.md" | ForEach-Object { Copy-Item $_.FullName -Destination $dest; 1 } | Measure-Object -Sum).Sum
+    Write-OK "ZCode: $count 个智能体 -> $dest"
+    Write-Warn "提示: 编辑定义文件后需新开会话，运行中的会话不会热重载"
+    Write-Warn "提示: 对话框里用 @ 引用子智能体，或让 ZCode 自动选择"
+}
+
+function Install-QwenPaw {
+    $src  = Join-Path $Integrations "qwenpaw"
+    $dest = Join-Path $Home_ ".qwenpaw\skill_pool"
+    if (-not (Test-Path $src)) { Write-Err "integrations\qwenpaw 不存在，请先运行 convert.ps1 -Tool qwenpaw"; return }
+    $count = 0
+    Get-ChildItem -Path $src -Directory | ForEach-Object {
+        $skillFile = Join-Path $_.FullName "SKILL.md"
+        if (Test-Path $skillFile) {
+            $skillDest = Join-Path $dest $_.Name
+            New-Item -ItemType Directory -Force -Path $skillDest | Out-Null
+            Copy-Item $skillFile -Destination $skillDest
+            $count++
+        }
+    }
+    Write-OK "QwenPaw: $count 个 skills -> $dest"
+    Write-Warn "提示: 手动放入技能池的 skill 默认为「禁用」状态，需在控制台启用后广播到工作区"
 }
 
 function Install-Kiro {
     $src  = Join-Path $Integrations "kiro"
     $dest = Join-Path $Home_ ".kiro\agents"
     if (-not (Test-Path $src)) { Write-Err "integrations\kiro 不存在，请先运行 convert.ps1"; return }
-    New-Item -ItemType Directory -Force -Path (Join-Path $dest "prompts") | Out-Null
-    $count = (Get-ChildItem -Path $src -Filter "*.json" | ForEach-Object { Copy-Item $_.FullName -Destination $dest; 1 } | Measure-Object -Sum).Sum
-    if (Test-Path (Join-Path $src "prompts")) {
-        Get-ChildItem -Path (Join-Path $src "prompts") -Filter "*.md" |
-            ForEach-Object { Copy-Item $_.FullName -Destination (Join-Path $dest "prompts") }
-    }
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    # Kiro 自定义智能体格式：.md 文件（带 YAML frontmatter）
+    # 参考：https://kiro.dev/docs/chat/subagents/
+    $count = (Get-ChildItem -Path $src -Filter "*.md" | ForEach-Object { Copy-Item $_.FullName -Destination $dest; 1 } | Measure-Object -Sum).Sum
     Write-OK "Kiro: $count 个智能体 -> $dest"
-    Write-Warn "提示: 在 Kiro 中使用 '/agent swap' 切换智能体"
+    Write-Warn "提示: Kiro 会自动识别 ~/.kiro/agents/ 下的 .md 文件作为自定义子智能体"
+    Write-Warn "提示: 在对话中使用 '/<agent-name>' 或让 Kiro 自动选择合适的子智能体"
 }
 
 function Install-Tool {
@@ -386,11 +504,22 @@ function Install-Tool {
         "workbuddy"   { Install-WorkBuddy  }
         "hermes"      { Install-Hermes     }
         "kiro"        { Install-Kiro       }
+        "zcode"       { Install-ZCode      }
+        "qwenpaw"     { Install-QwenPaw    }
     }
 }
 
 # --- 入口 ---
 Check-Integrations
+
+if ($Category.Count -gt 0 -and $Tool -ne "hermes") {
+    Write-Warn "-Category 仅对 -Tool hermes 生效，已忽略。"
+    $Category = @()
+}
+if ($HermesProfile -and $Tool -ne "hermes") {
+    Write-Warn "-Profile 仅对 -Tool hermes 生效，已忽略。"
+    $HermesProfile = ""
+}
 
 $selectedTools = @()
 
@@ -426,12 +555,22 @@ Write-Host "  仓库:     $RepoRoot"
 Write-Host "  安装到:   $($selectedTools -join ', ')"
 Write-Host ""
 
+# 单个工具失败（如 Hermes 多 profile 未指定 -Profile）不应中断其余工具的安装（issue #102）
+$script:FailedTools = @()
 foreach ($t in $selectedTools) {
     Install-Tool $t
 }
 
+$failedCount = @($script:FailedTools).Count
+$installedCount = $selectedTools.Count - $failedCount
+
 Write-Host ""
-Write-OK "完成！已安装 $($selectedTools.Count) 个工具。"
+if ($failedCount -gt 0) {
+    Write-Warn "完成：已安装 $installedCount 个工具，$failedCount 个未完成（见上方提示）。"
+} else {
+    Write-OK "完成！已安装 $installedCount 个工具。"
+}
 Write-Host ""
 Write-Dim "运行 .\scripts\convert.ps1 重新生成集成文件。"
 Write-Host ""
+if ($failedCount -gt 0) { exit 1 }

@@ -6,7 +6,7 @@
 # 请先运行 scripts/convert.sh 生成集成文件。
 #
 # 用法：
-#   ./scripts/install.sh [--tool <name>] [--no-interactive] [--help]
+#   ./scripts/install.sh [--tool <name>] [--profile <name>] [--no-interactive] [--help]
 #
 # 支持的工具：
 #   claude-code  -- 复制到 ~/.claude/agents/
@@ -23,9 +23,30 @@
 #   codex        -- 复制到 .codex/agents/（项目级）
 #   deerflow     -- 复制到 DeerFlow custom skills 目录（Docker 项目级）
 #   workbuddy    -- 复制到 ~/.workbuddy/skills/（全局）
+#   codewhale    -- 复制到 ~/.codewhale/skills/（全局，原 DeepSeek-TUI）
 #   hermes       -- 复制到 ~/.hermes/skills/（全局）
 #   kiro         -- 复制到 ~/.kiro/agents/（全局）
+#   qoder        -- 复制到 .qoder/agents/（项目级）
+#   zcode        -- 复制到 ~/.zcode/agents/（全局，智谱 ZCode）
+#   qwenpaw      -- 复制到 ~/.qwenpaw/skill_pool/（全局）
 #   all          -- 安装所有已检测到的工具（默认）
+#
+# Hermes 专属参数：
+#   --category <名称>  只安装某一分类下的 skills，可重复传入多次。
+#                      分类取 integrations/hermes/ 下的目录名，例如：
+#                        --category marketing
+#                        --category engineering --category design
+#                      Discord 模式下 Hermes 会把每个 skill 注册为斜杠命令，
+#                      总 JSON 超过 8000 字符会被 Discord API 拒绝 (error 50035)，
+#                      若需要在 Discord 中使用建议按分类分批安装。
+#   --profile <名称>   多 profile 环境下指定安装到哪个 profile（issue #102）。
+#                      Hermes 每个 profile 有独立的 skill 库，路径为
+#                        <base>/profiles/<名称>/skills/
+#                      其中 <base> = HERMES_HOME > $LOCALAPPDATA/hermes > ~/.hermes。
+#                      未指定 --profile 却检测到已存在多 profile 时，脚本会报错
+#                      退出而非静默装到根目录，避免装错位置。例如：
+#                        --tool hermes --profile work
+#                        --tool hermes --profile personal --category marketing
 
 set -euo pipefail
 
@@ -48,11 +69,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INTEGRATIONS="$REPO_ROOT/integrations"
 
-ALL_TOOLS=(claude-code copilot antigravity gemini-cli opencode openclaw cursor trae aider windsurf qwen codex deerflow workbuddy hermes kiro)
+ALL_TOOLS=(claude-code copilot antigravity gemini-cli opencode openclaw cursor trae aider windsurf qwen codex deerflow workbuddy codewhale hermes kiro qoder zcode qwenpaw)
 
 # --- 用法 ---
 usage() {
-  sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,49p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -79,8 +100,38 @@ detect_qwen()         { command -v qwen >/dev/null 2>&1 || [[ -d "${HOME}/.qwen"
 detect_codex()        { command -v codex >/dev/null 2>&1 || [[ -d "${HOME}/.codex" ]]; }
 detect_deerflow()     { command -v deerflow >/dev/null 2>&1 || [[ -d "${HOME}/.deerflow" ]] || docker ps --format '{{.Names}}' 2>/dev/null | grep -q deerflow; }
 detect_workbuddy()    { command -v workbuddy >/dev/null 2>&1 || [[ -d "${HOME}/.workbuddy" ]]; }
-detect_hermes()       { command -v hermes >/dev/null 2>&1 || [[ -d "${HOME}/.hermes" ]]; }
+detect_codewhale()    { command -v codewhale >/dev/null 2>&1 || [[ -d "${HOME}/.codewhale" ]] || [[ -d "${HOME}/.deepseek" ]]; }
+detect_zcode()        { command -v zcode >/dev/null 2>&1 || [[ -d "${HOME}/.zcode" ]]; }
+detect_qwenpaw()      { command -v qwenpaw >/dev/null 2>&1 || [[ -d "${QWENPAW_WORKING_DIR:-${HOME}/.qwenpaw}" ]]; }
+# Hermes 安装根目录（不含 profile）：HERMES_HOME > Windows($LOCALAPPDATA/hermes) > ~/.hermes（issue #82/#102）
+hermes_base_dir() {
+  if [[ -n "${HERMES_HOME:-}" ]]; then
+    printf '%s' "${HERMES_HOME}"
+  elif [[ -n "${LOCALAPPDATA:-}" && -d "${LOCALAPPDATA}/hermes" ]]; then
+    printf '%s' "${LOCALAPPDATA}/hermes"
+  else
+    printf '%s' "${HOME}/.hermes"
+  fi
+}
+# 根目录下是否存在多 profile（<base>/profiles/<name>/）
+hermes_has_profiles() {
+  local base="$1" d
+  [[ -d "$base/profiles" ]] || return 1
+  for d in "$base/profiles"/*/; do [[ -d "$d" ]] && return 0; done
+  return 1
+}
+# 打印现有 profile 名称，逗号分隔（与 install.ps1 保持一致）
+hermes_profile_names() {
+  local base="$1" d out=""
+  for d in "$base/profiles"/*/; do
+    [[ -d "$d" ]] || continue
+    out+="${out:+, }$(basename "$d")"
+  done
+  printf '%s' "$out"
+}
+detect_hermes()       { command -v hermes >/dev/null 2>&1 || [[ -d "${HOME}/.hermes" ]] || [[ -n "${HERMES_HOME:-}" && -d "${HERMES_HOME}" ]] || { [[ -n "${LOCALAPPDATA:-}" && -d "${LOCALAPPDATA}/hermes" ]]; }; }
 detect_kiro()         { command -v kiro >/dev/null 2>&1 || command -v kiro-cli >/dev/null 2>&1 || [[ -d "${HOME}/.kiro" ]]; }
+detect_qoder()        { command -v qoder >/dev/null 2>&1 || [[ -d "${HOME}/.qoder" ]]; }
 
 is_detected() {
   case "$1" in
@@ -98,8 +149,12 @@ is_detected() {
     codex)       detect_codex       ;;
     deerflow)    detect_deerflow    ;;
     workbuddy)   detect_workbuddy   ;;
+    codewhale)   detect_codewhale   ;;
     hermes)      detect_hermes      ;;
     kiro)        detect_kiro        ;;
+    qoder)       detect_qoder       ;;
+    zcode)       detect_zcode       ;;
+    qwenpaw)     detect_qwenpaw     ;;
     *)           return 1 ;;
   esac
 }
@@ -113,14 +168,19 @@ tool_label() {
     opencode)    printf "%-14s  %s" "OpenCode"     "(opencode.ai)"          ;;
     openclaw)    printf "%-14s  %s" "OpenClaw"     "(~/.openclaw)"          ;;
     cursor)      printf "%-14s  %s" "Cursor"       "(.cursor/rules)"        ;;
+    trae)        printf "%-14s  %s" "Trae"         "(.trae/rules)"          ;;
     aider)       printf "%-14s  %s" "Aider"        "(CONVENTIONS.md)"       ;;
     windsurf)    printf "%-14s  %s" "Windsurf"     "(.windsurfrules)"       ;;
     qwen)        printf "%-14s  %s" "Qwen Code"    "(~/.qwen/agents)"       ;;
     codex)       printf "%-14s  %s" "Codex CLI"    "(.codex/agents)"        ;;
     deerflow)    printf "%-14s  %s" "DeerFlow"     "(skills/custom)"        ;;
     workbuddy)   printf "%-14s  %s" "WorkBuddy"    "(~/.workbuddy/skills)"  ;;
+    codewhale)   printf "%-14s  %s" "CodeWhale"    "(~/.codewhale/skills)"  ;;
     hermes)      printf "%-14s  %s" "Hermes Agent" "(~/.hermes/skills)"     ;;
     kiro)        printf "%-14s  %s" "Kiro"         "(~/.kiro/agents)"       ;;
+    qoder)       printf "%-14s  %s" "Qoder"        "(.qoder/agents)"        ;;
+    zcode)       printf "%-14s  %s" "ZCode"        "(~/.zcode/agents)"      ;;
+    qwenpaw)     printf "%-14s  %s" "QwenPaw"      "(~/.qwenpaw/skill_pool)" ;;
   esac
 }
 
@@ -131,8 +191,8 @@ install_claude_code() {
   local count=0
   mkdir -p "$dest"
   local dir f first_line
-  for dir in academic design engineering finance game-development hr legal marketing paid-media sales product \
-              project-management supply-chain testing support spatial-computing specialized; do
+  for dir in academic company design engineering finance game-development gis hr legal marketing paid-media sales product \
+              project-management security supply-chain testing support spatial-computing specialized; do
     [[ -d "$REPO_ROOT/$dir" ]] || continue
     while IFS= read -r -d '' f; do
       first_line="$(head -1 "$f")"
@@ -150,8 +210,8 @@ install_copilot() {
   local count=0
   mkdir -p "$dest1" "$dest2"
   local dir f first_line
-  for dir in academic design engineering finance game-development hr legal marketing paid-media sales product \
-              project-management supply-chain testing support spatial-computing specialized; do
+  for dir in academic company design engineering finance game-development gis hr legal marketing paid-media sales product \
+              project-management security supply-chain testing support spatial-computing specialized; do
     [[ -d "$REPO_ROOT/$dir" ]] || continue
     while IFS= read -r -d '' f; do
       first_line="$(head -1 "$f")"
@@ -386,12 +446,66 @@ install_workbuddy() {
   ok "WorkBuddy: $count 个 skills -> $dest"
 }
 
-install_hermes() {
-  local src="$INTEGRATIONS/hermes"
-  local dest="${HOME}/.hermes/skills"
+install_codewhale() {
+  local src="$INTEGRATIONS/codewhale"
+  local dest="${HOME}/.codewhale/skills"
   local count=0
 
+  [[ -d "$src" ]] || { err "integrations/codewhale 不存在。请先运行 convert.sh --tool codewhale"; return 1; }
+
+  mkdir -p "$dest"
+
+  local d
+  while IFS= read -r -d '' d; do
+    local name; name="$(basename "$d")"
+    [[ -f "$d/SKILL.md" ]] || continue
+    mkdir -p "$dest/$name"
+    cp "$d/SKILL.md" "$dest/$name/SKILL.md"
+    (( count++ )) || true
+  done < <(find "$src" -mindepth 1 -maxdepth 1 -type d -print0)
+
+  ok "CodeWhale: $count 个 skills -> $dest"
+}
+
+install_hermes() {
+  local src="$INTEGRATIONS/hermes"
+
   [[ -d "$src" ]] || { err "integrations/hermes 不存在。请先运行 convert.sh --tool hermes"; return 1; }
+
+  # 安装目录解析（issue #82 / #102）：
+  #   <base> = HERMES_HOME > Windows($LOCALAPPDATA/hermes) > ~/.hermes
+  #   1. --profile <name>                       -> <base>/profiles/<name>/skills
+  #   2. 存在 profile 目录但未指定 --profile    -> 报错退出（避免静默装到根目录）
+  #   3. 默认                                    -> <base>/skills
+  local base; base="$(hermes_base_dir)"
+  local dest profile_note=""
+  if [[ -n "${HERMES_PROFILE:-}" ]]; then
+    dest="${base}/profiles/${HERMES_PROFILE}/skills"
+    profile_note=" [profile: ${HERMES_PROFILE}]"
+    if [[ ! -d "${base}/profiles/${HERMES_PROFILE}" ]]; then
+      warn "profile '${HERMES_PROFILE}' 尚不存在，将新建目录 ${base}/profiles/${HERMES_PROFILE}/。"
+      warn "请确认名称无误（现有 profile: $(hermes_profile_names "$base")）。"
+    fi
+  elif hermes_has_profiles "$base"; then
+    err "检测到 Hermes profile 目录（${base}/profiles/），但未指定 --profile。"
+    err "为避免装错位置，请用 --profile <名称> 指定目标 profile。"
+    err "现有 profile: $(hermes_profile_names "$base")"
+    err "或设置 HERMES_HOME 指向单一 profile 根目录后重试。"
+    return 1
+  else
+    dest="${base}/skills"
+  fi
+  local count=0
+
+  # 若指定了 --category，只安装命中的分类；否则安装全部
+  local filter_note=""
+  if [[ ${#HERMES_CATEGORIES[@]} -gt 0 ]]; then
+    local c
+    for c in "${HERMES_CATEGORIES[@]}"; do
+      [[ -d "$src/$c" ]] || { err "hermes 分类不存在: ${c}（可选: $(ls "$src" | tr '\n' ' ')）"; return 1; }
+    done
+    filter_note=" [分类: ${HERMES_CATEGORIES[*]}]"
+  fi
 
   mkdir -p "$dest"
 
@@ -399,6 +513,11 @@ install_hermes() {
   local catdir
   while IFS= read -r -d '' catdir; do
     local catname; catname="$(basename "$catdir")"
+    if [[ ${#HERMES_CATEGORIES[@]} -gt 0 ]]; then
+      local matched=false c
+      for c in "${HERMES_CATEGORIES[@]}"; do [[ "$c" == "$catname" ]] && matched=true && break; done
+      $matched || continue
+    fi
     local skilldir
     while IFS= read -r -d '' skilldir; do
       local skillname; skillname="$(basename "$skilldir")"
@@ -409,7 +528,58 @@ install_hermes() {
     done < <(find "$catdir" -mindepth 1 -maxdepth 1 -type d -print0)
   done < <(find "$src" -mindepth 1 -maxdepth 1 -type d -print0)
 
-  ok "Hermes Agent: $count 个 skills -> $dest"
+  ok "Hermes Agent: $count 个 skills -> $dest$filter_note$profile_note"
+  if [[ ${#HERMES_CATEGORIES[@]} -eq 0 && $count -gt 80 ]]; then
+    warn "Hermes Discord 模式对斜杠命令总长有 8000 字符上限（error 50035）。"
+    warn "若要在 Discord 中使用，建议用 --category <名称> 按分类分批安装。"
+  fi
+}
+
+# 智谱 ZCode —— subagent 文件 ~/.zcode/agents/<slug>.md
+# 参考：https://zcode.z.ai/en/docs/subagents
+install_zcode() {
+  local src="$INTEGRATIONS/zcode"
+  local dest="${HOME}/.zcode/agents"
+  local count=0
+
+  [[ -d "$src" ]] || { err "integrations/zcode 不存在。请先运行 convert.sh --tool zcode"; return 1; }
+
+  mkdir -p "$dest"
+
+  local f
+  while IFS= read -r -d '' f; do
+    cp "$f" "$dest/"
+    (( count++ )) || true
+  done < <(find "$src" -maxdepth 1 -name "*.md" -print0)
+
+  ok "ZCode: $count 个智能体 -> $dest"
+  warn "提示: 编辑定义文件后需新开会话，运行中的会话不会热重载"
+  warn "提示: 对话框里用 @ 引用子智能体，或让 ZCode 自动选择"
+}
+
+# QwenPaw —— skill 目录 ~/.qwenpaw/skill_pool/<slug>/SKILL.md
+# 参考：https://github.com/agentscope-ai/QwenPaw/blob/main/website/public/docs/skills.zh.md
+install_qwenpaw() {
+  local src="$INTEGRATIONS/qwenpaw"
+  local dest="${QWENPAW_WORKING_DIR:-${HOME}/.qwenpaw}/skill_pool"
+  local count=0
+
+  [[ -d "$src" ]] || { err "integrations/qwenpaw 不存在。请先运行 convert.sh --tool qwenpaw"; return 1; }
+
+  mkdir -p "$dest"
+
+  local d
+  while IFS= read -r -d '' d; do
+    local name; name="$(basename "$d")"
+    [[ -f "$d/SKILL.md" ]] || continue
+    mkdir -p "$dest/$name"
+    cp "$d/SKILL.md" "$dest/$name/SKILL.md"
+    (( count++ )) || true
+  done < <(find "$src" -mindepth 1 -maxdepth 1 -type d -print0)
+
+  ok "QwenPaw: $count 个 skills -> $dest"
+  warn "提示: 手动放入技能池的 skill 默认为「禁用」状态，需在控制台启用后广播到工作区"
+  warn "提示: 若不想复制进主池，可在 config.json 的 skill_paths 里登记 integrations/qwenpaw 作为外部技能根目录"
 }
 
 install_kiro() {
@@ -419,24 +589,38 @@ install_kiro() {
 
   [[ -d "$src" ]] || { err "integrations/kiro 不存在。请先运行 convert.sh --tool kiro"; return 1; }
 
-  mkdir -p "$dest/prompts"
+  mkdir -p "$dest"
 
-  # 复制 JSON 配置文件
+  # Kiro 自定义智能体格式：.md 文件（带 YAML frontmatter）
+  # 参考：https://kiro.dev/docs/chat/subagents/
   local f
   while IFS= read -r -d '' f; do
     cp "$f" "$dest/"
     (( count++ )) || true
-  done < <(find "$src" -maxdepth 1 -name "*.json" -print0)
-
-  # 复制 prompt 文件
-  if [[ -d "$src/prompts" ]]; then
-    while IFS= read -r -d '' f; do
-      cp "$f" "$dest/prompts/"
-    done < <(find "$src/prompts" -maxdepth 1 -name "*.md" -print0)
-  fi
+  done < <(find "$src" -maxdepth 1 -name "*.md" -print0)
 
   ok "Kiro: $count 个智能体 -> $dest"
-  warn "提示: 在 Kiro 中使用 '/agent swap' 切换智能体"
+  warn "提示: Kiro 会自动识别 ~/.kiro/agents/ 下的 .md 文件作为自定义子智能体"
+  warn "提示: 在对话中使用 '/<agent-name>' 或让 Kiro 自动选择合适的子智能体"
+}
+
+install_qoder() {
+  local src="$INTEGRATIONS/qoder/agents"
+  local dest="${PWD}/.qoder/agents"
+  local count=0
+
+  [[ -d "$src" ]] || { err "integrations/qoder 不存在。请先运行 convert.sh --tool qoder"; return 1; }
+
+  mkdir -p "$dest"
+
+  local f
+  while IFS= read -r -d '' f; do
+    cp "$f" "$dest/"
+    (( count++ )) || true
+  done < <(find "$src" -maxdepth 1 -name "*.md" -print0)
+
+  ok "Qoder: $count 个智能体 -> $dest"
+  warn "Qoder: 项目级安装。请在项目根目录运行。"
 }
 
 install_tool() {
@@ -455,23 +639,40 @@ install_tool() {
     codex)       install_codex       ;;
     deerflow)    install_deerflow    ;;
     workbuddy)   install_workbuddy   ;;
+    codewhale)   install_codewhale   ;;
     hermes)      install_hermes      ;;
     kiro)        install_kiro        ;;
+    qoder)       install_qoder       ;;
+    zcode)       install_zcode       ;;
+    qwenpaw)     install_qwenpaw     ;;
   esac
 }
 
 # --- 入口 ---
 main() {
   local tool="all"
+  HERMES_CATEGORIES=()
+  HERMES_PROFILE=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --tool)            tool="${2:?'--tool 需要一个值'}"; shift 2 ;;
+      --category)        HERMES_CATEGORIES+=("${2:?'--category 需要一个值'}"); shift 2 ;;
+      --profile|-p)      HERMES_PROFILE="${2:?'--profile 需要一个值'}"; shift 2 ;;
       --no-interactive)  shift ;;
       --help|-h)         usage ;;
       *)                 err "未知选项: $1"; usage ;;
     esac
   done
+
+  if [[ ${#HERMES_CATEGORIES[@]} -gt 0 && "$tool" != "hermes" ]]; then
+    warn "--category 仅对 --tool hermes 生效，已忽略。"
+    HERMES_CATEGORIES=()
+  fi
+  if [[ -n "$HERMES_PROFILE" && "$tool" != "hermes" ]]; then
+    warn "--profile 仅对 --tool hermes 生效，已忽略。"
+    HERMES_PROFILE=""
+  fi
 
   check_integrations
 
@@ -516,17 +717,27 @@ main() {
   printf "  安装到:   %s\n" "${SELECTED_TOOLS[*]}"
   printf "\n"
 
-  local installed=0 t
+  local installed=0 failed=0 t
   for t in "${SELECTED_TOOLS[@]}"; do
-    install_tool "$t"
-    (( installed++ )) || true
+    # 单个工具失败（如 Hermes 多 profile 未指定 --profile）不应中断其余工具的安装
+    if install_tool "$t"; then
+      (( installed++ )) || true
+    else
+      (( failed++ )) || true
+      warn "$(tool_label "$t") 安装未完成（见上方提示）。"
+    fi
   done
 
   printf "\n"
-  ok "完成！已安装 $installed 个工具。"
+  if [[ $failed -gt 0 ]]; then
+    warn "完成：已安装 $installed 个工具，$failed 个未完成。"
+  else
+    ok "完成！已安装 $installed 个工具。"
+  fi
   printf "\n"
   dim "  运行 ./scripts/convert.sh 重新生成集成文件。"
   printf "\n"
+  [[ $failed -eq 0 ]]
 }
 
 main "$@"

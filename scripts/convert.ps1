@@ -20,7 +20,9 @@
 #   deerflow     — DeerFlow 2.0 custom skill 文件
 #   workbuddy    — WorkBuddy skill 文件
 #   hermes       — Hermes Agent skill 文件
-#   kiro         — Kiro agent JSON 文件
+#   kiro         — Kiro agent .md 文件（带 YAML frontmatter）
+#   zcode        — 智谱 ZCode subagent .md 文件（带 YAML frontmatter）
+#   qwenpaw      — QwenPaw skill 文件（<slug>\SKILL.md）
 #   all          — 所有工具（默认）
 
 param(
@@ -39,13 +41,13 @@ $OutDir    = if ($Out) { $Out } else { Join-Path $RepoRoot "integrations" }
 $Today     = Get-Date -Format "yyyy-MM-dd"
 
 $AgentDirs = @(
-    "academic","design","engineering","finance","game-development","hr","legal",
+    "academic","company","design","engineering","finance","game-development","hr","legal",
     "marketing","paid-media","sales","product","project-management",
     "supply-chain","testing","support","spatial-computing","specialized"
 )
 
 $ValidTools = @("antigravity","gemini-cli","opencode","cursor","trae","aider",
-                "windsurf","openclaw","qwen","codex","deerflow","workbuddy","hermes","kiro","all")
+                "windsurf","openclaw","qwen","codex","deerflow","workbuddy","hermes","kiro","zcode","qwenpaw","all")
 
 # --- 颜色输出 ---
 function Write-OK   { param($msg) Write-Host "[OK]  $msg" -ForegroundColor Green }
@@ -336,22 +338,72 @@ $body
 "@ | Set-Content -Path (Join-Path $outDir "SKILL.md") -Encoding UTF8
 }
 
+function Convert-ZCode {
+    param([string]$File, [string[]]$Lines)
+    $description = Get-Field "description" $Lines
+    $color       = Get-Field "color" $Lines
+    $slug        = Get-Slug $File
+    $body        = Get-Body $Lines
+    $zcodeDir    = Join-Path $OutDir "zcode"
+    New-Item -ItemType Directory -Force -Path $zcodeDir | Out-Null
+    # 智谱 ZCode subagent 格式：带 YAML frontmatter 的 .md 文件
+    # 放置于 ~/.zcode/agents/<slug>.md，name 与 description 必填
+    # 参考：https://zcode.z.ai/en/docs/subagents
+    if ($color) {
+        @"
+---
+name: $slug
+description: $description
+color: $color
+---
+$body
+"@ | Set-Content -Path (Join-Path $zcodeDir "${slug}.md") -Encoding UTF8
+    } else {
+        @"
+---
+name: $slug
+description: $description
+---
+$body
+"@ | Set-Content -Path (Join-Path $zcodeDir "${slug}.md") -Encoding UTF8
+    }
+}
+
+function Convert-QwenPaw {
+    param([string]$File, [string[]]$Lines)
+    $description = Get-Field "description" $Lines
+    $slug        = Get-Slug $File
+    $body        = Get-Body $Lines
+    $outDir      = Join-Path $OutDir "qwenpaw\$slug"
+    New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+    # QwenPaw skill 格式：<slug>\SKILL.md，name 与 description 必填
+    # 参考：https://github.com/agentscope-ai/QwenPaw/blob/main/website/public/docs/skills.zh.md
+    @"
+---
+name: $slug
+description: $description
+---
+$body
+"@ | Set-Content -Path (Join-Path $outDir "SKILL.md") -Encoding UTF8
+}
+
 function Convert-Kiro {
     param([string]$File, [string[]]$Lines)
     $description = Get-Field "description" $Lines
     $slug        = Get-Slug $File
     $body        = Get-Body $Lines
-    $promptsDir  = Join-Path $OutDir "kiro\prompts"
-    New-Item -ItemType Directory -Force -Path $promptsDir | Out-Null
-    $body | Set-Content -Path (Join-Path $promptsDir "${slug}.md") -Encoding UTF8
-    $escapedDesc = $description -replace '"','\"'
+    $kiroDir     = Join-Path $OutDir "kiro"
+    New-Item -ItemType Directory -Force -Path $kiroDir | Out-Null
+    # Kiro 自定义智能体格式：带 YAML frontmatter 的 .md 文件
+    # 放置于 ~/.kiro/agents/<slug>.md
+    # 参考：https://kiro.dev/docs/chat/subagents/
     @"
-{
-  "name": "$slug",
-  "description": "$escapedDesc",
-  "prompt": "file://./prompts/${slug}.md"
-}
-"@ | Set-Content -Path (Join-Path $OutDir "kiro\${slug}.json") -Encoding UTF8
+---
+name: $slug
+description: $description
+---
+$body
+"@ | Set-Content -Path (Join-Path $kiroDir "${slug}.md") -Encoding UTF8
 }
 
 # --- Aider / Windsurf 累积 ---
@@ -398,6 +450,8 @@ function Run-Conversions {
                 "workbuddy"   { Convert-WorkBuddy   $filePath $lines }
                 "hermes"      { Convert-Hermes      $filePath $lines }
                 "kiro"        { Convert-Kiro        $filePath $lines }
+                "zcode"       { Convert-ZCode       $filePath $lines }
+                "qwenpaw"     { Convert-QwenPaw     $filePath $lines }
                 "aider"       { Accumulate-Aider    $filePath $lines }
                 "windsurf"    { Accumulate-Windsurf $filePath $lines }
             }
